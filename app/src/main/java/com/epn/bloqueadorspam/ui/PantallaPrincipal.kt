@@ -1,6 +1,9 @@
 package com.epn.bloqueadorspam.ui
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.PackageManager
+import android.provider.CallLog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -8,11 +11,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
@@ -23,13 +22,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.epn.bloqueadorspam.data.AppDatabase
 import com.epn.bloqueadorspam.data.LlamadaBloqueada
+import com.epn.bloqueadorspam.data.LlamadaTelefono
 import com.epn.bloqueadorspam.data.NumeroBloqueado
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -64,6 +66,9 @@ class ListaNegraViewModel(application: Application) : AndroidViewModel(applicati
             initialValue = 0
         )
 
+    private val _historialTelefono = MutableStateFlow<List<LlamadaTelefono>>(emptyList())
+    val historialTelefono: StateFlow<List<LlamadaTelefono>> = _historialTelefono
+
     fun agregarNumero(numero: String) {
         val numeroLimpio = com.epn.bloqueadorspam.utils.normalizarNumeroTelefono(numero)
         if (numeroLimpio.isNotEmpty()) {
@@ -84,6 +89,40 @@ class ListaNegraViewModel(application: Application) : AndroidViewModel(applicati
             dao.eliminarPorNumero(numero)
         }
     }
+
+    fun cargarHistorialTelefono() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val lista = mutableListOf<LlamadaTelefono>()
+            if (ContextCompat.checkSelfPermission(getApplication(), Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED) {
+                try {
+                    val cursor = getApplication<Application>().contentResolver.query(
+                        CallLog.Calls.CONTENT_URI,
+                        arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.DATE, CallLog.Calls.TYPE, CallLog.Calls.DURATION),
+                        null,
+                        null,
+                        CallLog.Calls.DATE + " DESC LIMIT 50"
+                    )
+                    cursor?.use {
+                        val numberIndex = it.getColumnIndex(CallLog.Calls.NUMBER)
+                        val dateIndex = it.getColumnIndex(CallLog.Calls.DATE)
+                        val typeIndex = it.getColumnIndex(CallLog.Calls.TYPE)
+                        val durationIndex = it.getColumnIndex(CallLog.Calls.DURATION)
+
+                        while (it.moveToNext()) {
+                            val number = it.getString(numberIndex) ?: "Desconocido"
+                            val date = it.getLong(dateIndex)
+                            val type = it.getInt(typeIndex)
+                            val duration = it.getString(durationIndex) ?: "0"
+                            lista.add(LlamadaTelefono(number, date, type, duration))
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            _historialTelefono.value = lista
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -98,15 +137,21 @@ fun PantallaPrincipal(
     val numeros by viewModel.numerosBloqueados.collectAsState()
     val historial by viewModel.historial.collectAsState()
     val totalBloqueos by viewModel.totalBloqueos.collectAsState()
+    val historialTelefono by viewModel.historialTelefono.collectAsState()
     
     var nuevoNumero by remember { mutableStateOf("") }
-    
-    // Estado para el diálogo de confirmación
     var showDialog by remember { mutableStateOf(false) }
     var numeroADesbloquear by remember { mutableStateOf("") }
     
-    // Seleccionar entre pestaña de lista negra y de historial
+    // 0: Lista Negra, 1: Historial Bloqueos, 2: Registro Llamadas
     var currentTab by remember { mutableStateOf(0) }
+
+    // Cargar historial si estamos en esa pestaña
+    LaunchedEffect(currentTab, permisosConcedidos) {
+        if (currentTab == 2 && permisosConcedidos) {
+            viewModel.cargarHistorialTelefono()
+        }
+    }
 
     if (showDialog) {
         AlertDialog(
@@ -136,7 +181,6 @@ fun PantallaPrincipal(
 
     Scaffold(
         topBar = {
-            // Header estilo Budget App
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -173,7 +217,6 @@ fun PantallaPrincipal(
             contentPadding = PaddingValues(top = 16.dp, bottom = 24.dp)
         ) {
             
-            // Advertencia de Permisos
             if (!permisosConcedidos || !rolConcedido) {
                 item {
                     Card(
@@ -182,13 +225,13 @@ fun PantallaPrincipal(
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text(
-                                text = "Atención: Faltan accesos vitales",
+                                text = "Faltan permisos o rol",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = Color.Black
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "Para que la app intercepte llamadas, debes conceder los permisos y el rol.",
+                                text = "Para intercepar llamadas o ver el registro de llamadas reales, debes conceder los permisos (incluyendo Leer Historial) y el Rol de Filtrado.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = Color.DarkGray
                             )
@@ -217,7 +260,6 @@ fun PantallaPrincipal(
                 }
             }
 
-            // Main "Spending" Card style
             item {
                 Card(
                     shape = RoundedCornerShape(24.dp),
@@ -234,7 +276,6 @@ fun PantallaPrincipal(
                             )
                             .padding(24.dp)
                     ) {
-                        // Icon top left
                         Box(
                             modifier = Modifier
                                 .size(40.dp)
@@ -244,7 +285,6 @@ fun PantallaPrincipal(
                             Icon(Icons.Default.Lock, contentDescription = "Lock", tint = Color.White)
                         }
                         
-                        // Badge top right
                         Surface(
                             modifier = Modifier.align(Alignment.TopEnd),
                             shape = RoundedCornerShape(12.dp),
@@ -259,7 +299,6 @@ fun PantallaPrincipal(
                             )
                         }
 
-                        // Big stat bottom
                         Column(modifier = Modifier.align(Alignment.BottomStart)) {
                             Text(text = "Total Bloqueadas", color = Color.LightGray, fontSize = 14.sp)
                             Text(text = "$totalBloqueos", color = Color.White, fontSize = 36.sp, fontWeight = FontWeight.Bold)
@@ -268,7 +307,6 @@ fun PantallaPrincipal(
                 }
             }
 
-            // Input Card
             item {
                 Card(
                     shape = RoundedCornerShape(16.dp),
@@ -315,58 +353,77 @@ fun PantallaPrincipal(
                 }
             }
 
-            // Tabs for Lists
             item {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                    TabRow(
-                        selectedTabIndex = currentTab,
-                        containerColor = Color.Transparent,
-                        contentColor = Color.Black,
-                        divider = {},
-                        indicator = { tabPositions ->
-                            TabRowDefaults.SecondaryIndicator(
-                                Modifier.tabIndicatorOffset(tabPositions[currentTab]),
-                                color = Color.Black
-                            )
-                        }
-                    ) {
-                        Tab(
-                            selected = currentTab == 0,
-                            onClick = { currentTab = 0 },
-                            text = { Text("Lista Negra", fontWeight = if (currentTab == 0) FontWeight.Bold else FontWeight.Normal) }
-                        )
-                        Tab(
-                            selected = currentTab == 1,
-                            onClick = { currentTab = 1 },
-                            text = { Text("Historial", fontWeight = if (currentTab == 1) FontWeight.Bold else FontWeight.Normal) }
+                ScrollableTabRow(
+                    selectedTabIndex = currentTab,
+                    containerColor = Color.Transparent,
+                    contentColor = Color.Black,
+                    edgePadding = 0.dp,
+                    divider = {},
+                    indicator = { tabPositions ->
+                        TabRowDefaults.SecondaryIndicator(
+                            Modifier.tabIndicatorOffset(tabPositions[currentTab]),
+                            color = Color.Black
                         )
                     }
+                ) {
+                    Tab(
+                        selected = currentTab == 0,
+                        onClick = { currentTab = 0 },
+                        text = { Text("Lista Negra", fontWeight = if (currentTab == 0) FontWeight.Bold else FontWeight.Normal) }
+                    )
+                    Tab(
+                        selected = currentTab == 1,
+                        onClick = { currentTab = 1 },
+                        text = { Text("Bloqueos", fontWeight = if (currentTab == 1) FontWeight.Bold else FontWeight.Normal) }
+                    )
+                    Tab(
+                        selected = currentTab == 2,
+                        onClick = { currentTab = 2 },
+                        text = { Text("Teléfono", fontWeight = if (currentTab == 2) FontWeight.Bold else FontWeight.Normal) }
+                    )
                 }
             }
 
-            if (currentTab == 0) {
-                if (numeros.isEmpty()) {
-                    item {
-                        EmptyState("La lista negra está vacía")
-                    }
-                } else {
-                    items(numeros, key = { "ln_${it.numero}" }) { item ->
-                        ListaNegraItem(item = item) {
-                            numeroADesbloquear = item.numero
-                            showDialog = true
+            when (currentTab) {
+                0 -> {
+                    if (numeros.isEmpty()) {
+                        item { EmptyState("La lista negra está vacía") }
+                    } else {
+                        items(numeros, key = { "ln_${it.numero}" }) { item ->
+                            ListaNegraItem(item = item) {
+                                numeroADesbloquear = item.numero
+                                showDialog = true
+                            }
                         }
                     }
                 }
-            } else {
-                if (historial.isEmpty()) {
-                    item {
-                        EmptyState("No hay llamadas bloqueadas aún")
+                1 -> {
+                    if (historial.isEmpty()) {
+                        item { EmptyState("No hay llamadas bloqueadas aún") }
+                    } else {
+                        items(historial, key = { "h_${it.id}" }) { item ->
+                            HistorialBloqueoItem(item = item) {
+                                numeroADesbloquear = item.numero
+                                showDialog = true
+                            }
+                        }
                     }
-                } else {
-                    items(historial, key = { "h_${it.id}" }) { item ->
-                        HistorialItem(item = item) {
-                            numeroADesbloquear = item.numero
-                            showDialog = true
+                }
+                2 -> {
+                    if (!permisosConcedidos) {
+                        item { EmptyState("Otorga el permiso de llamadas para ver el historial.") }
+                    } else if (historialTelefono.isEmpty()) {
+                        item { EmptyState("No se encontraron llamadas recientes.") }
+                    } else {
+                        items(historialTelefono) { item ->
+                            val norm = com.epn.bloqueadorspam.utils.normalizarNumeroTelefono(item.numero)
+                            val isBlocked = numeros.any { it.numero == norm }
+                            LlamadaTelefonoItem(
+                                item = item,
+                                isBlocked = isBlocked,
+                                onBloquear = { viewModel.agregarNumero(item.numero) }
+                            )
                         }
                     }
                 }
@@ -421,7 +478,7 @@ fun ListaNegraItem(item: NumeroBloqueado, onEliminar: () -> Unit) {
 }
 
 @Composable
-fun HistorialItem(item: LlamadaBloqueada, onDesbloquear: () -> Unit) {
+fun HistorialBloqueoItem(item: LlamadaBloqueada, onDesbloquear: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -452,6 +509,56 @@ fun HistorialItem(item: LlamadaBloqueada, onDesbloquear: () -> Unit) {
                 colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)
             ) {
                 Text("Desbloquear")
+            }
+        }
+    }
+}
+
+@Composable
+fun LlamadaTelefonoItem(item: LlamadaTelefono, isBlocked: Boolean, onBloquear: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier.size(40.dp).background(Color(0xFFF5F5F5), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val icon = when (item.tipo) {
+                        CallLog.Calls.INCOMING_TYPE -> Icons.Default.KeyboardArrowDown
+                        CallLog.Calls.OUTGOING_TYPE -> Icons.Default.KeyboardArrowUp
+                        CallLog.Calls.MISSED_TYPE -> Icons.Default.Warning
+                        CallLog.Calls.REJECTED_TYPE -> Icons.Default.Clear
+                        else -> Icons.Default.Phone
+                    }
+                    val iconTint = if (item.tipo == CallLog.Calls.MISSED_TYPE || item.tipo == CallLog.Calls.REJECTED_TYPE) Color.DarkGray else Color.Gray
+                    Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(20.dp))
+                }
+                Spacer(modifier = Modifier.width(16.dp))
+                Column {
+                    Text(item.numero, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                    val fecha = SimpleDateFormat("dd/MM/yy HH:mm", Locale.getDefault()).format(Date(item.fecha))
+                    Text(fecha, fontSize = 12.sp, color = Color.Gray)
+                }
+            }
+            
+            if (isBlocked) {
+                Text("Bloqueado", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(end = 8.dp))
+            } else {
+                TextButton(
+                    onClick = onBloquear,
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)
+                ) {
+                    Text("Bloquear")
+                }
             }
         }
     }

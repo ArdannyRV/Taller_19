@@ -6,12 +6,12 @@ plugins {
 
 android {
     namespace = "com.epn.bloqueadorspam"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.epn.bloqueadorspam"
         minSdk = 29
-        targetSdk = 35
+        targetSdk = 37
         versionCode = 1
         versionName = "1.0"
 

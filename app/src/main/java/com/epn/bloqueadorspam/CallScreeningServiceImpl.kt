@@ -19,9 +19,8 @@ class CallScreeningServiceImpl : CallScreeningService() {
         // El formato típicamente viene como "tel:+593987654321"
         val rawNumber = callDetails.handle?.schemeSpecificPart ?: ""
         
-        // Normalizamos: quitamos todo lo que no sea dígito o el signo '+'
-        // Esto elimina espacios, guiones o cualquier otro caracter no deseado.
-        val normalizedNumber = rawNumber.replace(Regex("[^0-9+]"), "")
+        // Normalizamos: ignoramos prefijo de país y dejamos últimos 9-10 dígitos
+        val normalizedNumber = com.epn.bloqueadorspam.utils.normalizarNumeroTelefono(rawNumber)
 
         // Validación de seguridad: si no pudimos extraer un número válido, 
         // dejamos pasar la llamada respondiendo con un CallResponse vacío.
@@ -35,14 +34,13 @@ class CallScreeningServiceImpl : CallScreeningService() {
         // Se utiliza launch y try/catch para asegurar que siempre haya una respuesta.
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Instanciamos el DAO accediendo a la base de datos
-                val dao = AppDatabase.getInstance(applicationContext).numeroBloqueadoDao()
+                // Instanciamos los DAOs accediendo a la base de datos
+                val db = AppDatabase.getInstance(applicationContext)
+                val numeroBloqueadoDao = db.numeroBloqueadoDao()
+                val llamadaBloqueadaDao = db.llamadaBloqueadaDao()
                 
                 // Consultamos si el número existe en la base de datos local
-                // Nota: Si en el futuro requieres comparar solo los últimos 9-10 dígitos
-                // para omitir el código de país, puedes manipular 'normalizedNumber' antes
-                // de pasarlo a este método, o cambiar el query en Room a "LIKE '%numero'".
-                val estaBloqueado = dao.existe(normalizedNumber)
+                val estaBloqueado = numeroBloqueadoDao.existe(normalizedNumber)
 
                 if (estaBloqueado) {
                     Log.d("CallScreening", "Número bloqueado interceptado: $normalizedNumber")
@@ -58,8 +56,10 @@ class CallScreeningServiceImpl : CallScreeningService() {
                     // Enviamos la instrucción al sistema para rechazarla
                     respondToCall(callDetails, response)
                     
+                    // Guardar en el historial de llamadas bloqueadas
+                    llamadaBloqueadaDao.insertar(com.epn.bloqueadorspam.data.LlamadaBloqueada(numero = normalizedNumber))
+
                     // Disparamos una notificación local indicando al usuario que la app bloqueó la llamada.
-                    // (Llamada al helper que se creará posteriormente en el proyecto)
                     NotificationHelper.mostrarNotificacionBloqueo(applicationContext, normalizedNumber)
                 } else {
                     // Si no está bloqueado, lo dejamos pasar construyendo un CallResponse por defecto

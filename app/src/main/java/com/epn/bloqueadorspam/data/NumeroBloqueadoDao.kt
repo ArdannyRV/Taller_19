@@ -17,15 +17,15 @@ interface NumeroBloqueadoDao {
     // Inserta un nuevo número. Si el número ya existe, lo reemplaza (actualiza).
     // Se usa 'suspend' para que se ejecute en una corrutina y no bloquee el hilo principal.
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertar(numero: NumeroBloqueado)
+    suspend fun insertar(numero: NumeroBloqueado): Long
 
     // Elimina un registro de la base de datos pasando el objeto completo.
     @Delete
-    suspend fun eliminar(numero: NumeroBloqueado)
+    suspend fun eliminar(numero: NumeroBloqueado): Int
 
     // Elimina un número bloqueado proporcionando directamente el String del número.
     @Query("DELETE FROM numeros_bloqueados WHERE numero = :numero")
-    suspend fun eliminarPorNumero(numero: String)
+    suspend fun eliminarPorNumero(numero: String): Int
 
     // Obtiene todos los números bloqueados, ordenados del más reciente al más antiguo.
     // Retorna un Flow, lo que permite observar cambios en la base de datos en tiempo real (útil con Jetpack Compose).
